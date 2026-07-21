@@ -18,6 +18,15 @@ const watchSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    gender: {
+      type: String,
+      enum: {
+        values: ['Men', 'Women', 'Unisex'],
+        message: '{VALUE} is not a valid gender',
+      },
+      default: 'Unisex',
+      index: true,
+    },
     watchType: {
       type: String,
       required: [true, 'Watch Type is required'],

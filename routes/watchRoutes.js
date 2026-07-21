@@ -6,8 +6,232 @@ const { uploadToCloudinary, deleteFromCloudinary } = require('../utils/cloudinar
 
 const router = express.Router();
 
-// Apply auth protection to all watch routes
+// Helper function to parse form JSON data if multipart
+const parseWatchBody = (req) => {
+  let body = req.body;
+  if (typeof body.watchColor === 'string') {
+    try {
+      body.watchColor = JSON.parse(body.watchColor);
+    } catch (e) {
+      body.watchColor = {};
+    }
+  }
+  return body;
+};
+
+// =========================================================
+// PUBLIC ROUTE - Unauthenticated Access for Customer Showcase
+// =========================================================
+
+// @route   GET /api/watches/public
+// @desc    Get list of available watches for public store showcase
+// @access  Public (No Auth Token Required)
+router.get('/public', async (req, res) => {
+  try {
+    const {
+      search,
+      gender,
+      watchType,
+      mechanism,
+      quality,
+      page = 1,
+      limit = 100,
+    } = req.query;
+
+    const query = { status: 'Available' };
+
+    if (gender && gender !== 'All') {
+      query.gender = gender;
+    }
+
+    if (watchType && watchType !== 'All') {
+      query.watchType = watchType;
+    }
+
+    if (mechanism && mechanism !== 'All') {
+      query.mechanism = mechanism;
+    }
+
+    if (quality && quality !== 'All') {
+      query.quality = quality;
+    }
+
+    if (search) {
+      const searchRegex = new RegExp(search, 'i');
+      query.$or = [
+        { brandName: searchRegex },
+        { modelName: searchRegex },
+        { modelCode: searchRegex },
+      ];
+    }
+
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
+
+    const total = await Watch.countDocuments(query);
+    const watches = await Watch.find(query)
+      .select('brandName modelName modelCode gender watchType mechanism watchColor quality sellingPrice imageUrl createdAt')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum);
+
+    res.json({
+      success: true,
+      count: watches.length,
+      total,
+      page: pageNum,
+      pages: Math.ceil(total / limitNum) || 1,
+      data: watches,
+    });
+  } catch (error) {
+    console.error('Error in public watch showcase API:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch public watch showcase' });
+  }
+});
+
+// =========================================================
+// PROTECTED ADMIN ROUTES - Require JWT Authorization
+// =========================================================
+
 router.use(protect);
+
+// @route   GET /api/watches/export/sales
+// @desc    Export sales details as CSV file download
+// @access  Private (Admin)
+router.get('/export/sales', async (req, res) => {
+  try {
+    const { period = 'all' } = req.query;
+    const now = new Date();
+    let startDate = null;
+
+    if (period === 'day') {
+      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    } else if (period === 'week') {
+      startDate = new Date(now);
+      startDate.setDate(now.getDate() - 7);
+    } else if (period === 'month') {
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+    } else if (period === 'year') {
+      startDate = new Date(now.getFullYear(), 0, 1);
+    }
+
+    const query = { status: 'Sold' };
+    if (startDate) {
+      query.soldAt = { $gte: startDate };
+    }
+
+    const soldWatches = await Watch.find(query).sort({ soldAt: -1 });
+
+    const headers = [
+      'Sale Date',
+      'Brand Name',
+      'Model Name',
+      'Model Code',
+      'Gender',
+      'Quality',
+      'Watch Type',
+      'Mechanism',
+      'Buying Cost (INR)',
+      'Target Price (INR)',
+      'Final Sold Price (INR)',
+      'Net Profit (INR)',
+      'Profit Margin (%)',
+      'Buyer Name',
+      'Buyer Number',
+    ];
+
+    let csvContent = headers.join(',') + '\n';
+
+    soldWatches.forEach((w) => {
+      const soldDate = w.soldAt ? new Date(w.soldAt).toISOString().split('T')[0] : '';
+      const profit = (w.finalPrice || 0) - (w.buyingPrice || 0);
+      const margin = w.finalPrice && w.finalPrice > 0 ? ((profit / w.finalPrice) * 100).toFixed(2) : '0.00';
+
+      const row = [
+        `"${soldDate}"`,
+        `"${w.brandName || ''}"`,
+        `"${w.modelName || ''}"`,
+        `"${w.modelCode || ''}"`,
+        `"${w.gender || 'Unisex'}"`,
+        `"${w.quality || ''}"`,
+        `"${w.watchType || ''}"`,
+        `"${w.mechanism || ''}"`,
+        w.buyingPrice || 0,
+        w.sellingPrice || 0,
+        w.finalPrice || 0,
+        profit,
+        margin,
+        `"${(w.buyerName || '').replace(/"/g, '""')}"`,
+        `"${(w.buyerNumber || '').replace(/"/g, '""')}"`,
+      ];
+      csvContent += row.join(',') + '\n';
+    });
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename=SmarterTimes_Sales_Report_${period}.csv`);
+    res.status(200).send(csvContent);
+  } catch (error) {
+    console.error('Error exporting sales CSV:', error);
+    res.status(500).json({ success: false, message: 'Failed to generate sales CSV export' });
+  }
+});
+
+// @route   GET /api/watches/export/stock
+// @desc    Export current stock details as CSV file download
+// @access  Private (Admin)
+router.get('/export/stock', async (req, res) => {
+  try {
+    const availableWatches = await Watch.find({ status: 'Available' }).sort({ createdAt: -1 });
+
+    const headers = [
+      'Date Added',
+      'Brand Name',
+      'Model Name',
+      'Model Code',
+      'Gender',
+      'Quality',
+      'Watch Type',
+      'Mechanism',
+      'Dial Color',
+      'Band Color',
+      'Buying Cost (INR)',
+      'Target Selling Price (INR)',
+      'Status',
+      'Item Notes',
+    ];
+
+    let csvContent = headers.join(',') + '\n';
+
+    availableWatches.forEach((w) => {
+      const addedDate = w.createdAt ? new Date(w.createdAt).toISOString().split('T')[0] : '';
+      const row = [
+        `"${addedDate}"`,
+        `"${w.brandName || ''}"`,
+        `"${w.modelName || ''}"`,
+        `"${w.modelCode || ''}"`,
+        `"${w.gender || 'Unisex'}"`,
+        `"${w.quality || ''}"`,
+        `"${w.watchType || ''}"`,
+        `"${w.mechanism || ''}"`,
+        `"${w.watchColor?.dialColor || ''}"`,
+        `"${w.watchColor?.chainOrStrapColor || ''}"`,
+        w.buyingPrice || 0,
+        w.sellingPrice || 0,
+        `"${w.status}"`,
+        `"${(w.notes || '').replace(/"/g, '""')}"`,
+      ];
+      csvContent += row.join(',') + '\n';
+    });
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename=SmarterTimes_Available_Stock_Report.csv');
+    res.status(200).send(csvContent);
+  } catch (error) {
+    console.error('Error exporting stock CSV:', error);
+    res.status(500).json({ success: false, message: 'Failed to generate stock CSV export' });
+  }
+});
 
 // @route   GET /api/watches
 // @desc    Get list of watches with filtering, search & pagination
@@ -17,6 +241,7 @@ router.get('/', async (req, res) => {
     const {
       search,
       status,
+      gender,
       quality,
       mechanism,
       watchType,
@@ -30,6 +255,10 @@ router.get('/', async (req, res) => {
 
     if (status && status !== 'All') {
       query.status = status;
+    }
+
+    if (gender && gender !== 'All') {
+      query.gender = gender;
     }
 
     if (quality && quality !== 'All') {
@@ -98,19 +327,6 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// Helper function to parse form JSON data if multipart
-const parseWatchBody = (req) => {
-  let body = req.body;
-  if (typeof body.watchColor === 'string') {
-    try {
-      body.watchColor = JSON.parse(body.watchColor);
-    } catch (e) {
-      body.watchColor = {};
-    }
-  }
-  return body;
-};
-
 // @route   POST /api/watches
 // @desc    Add new watch detail with optional Cloudinary image upload
 // @access  Private (Admin)
@@ -122,6 +338,7 @@ router.post('/', upload.single('image'), async (req, res) => {
       brandName,
       modelName,
       modelCode,
+      gender,
       watchType,
       mechanism,
       watchColor,
@@ -148,9 +365,7 @@ router.post('/', upload.single('image'), async (req, res) => {
     let imageUrl = '';
     let imagePublicId = '';
 
-    // If file was uploaded in request
     if (req.file) {
-      console.log('[CLOUDINARY] Uploading image for new watch...');
       const uploadRes = await uploadToCloudinary(req.file.buffer);
       imageUrl = uploadRes.secure_url;
       imagePublicId = uploadRes.public_id;
@@ -160,6 +375,7 @@ router.post('/', upload.single('image'), async (req, res) => {
       brandName,
       modelName,
       modelCode: modelCode || '',
+      gender: gender || 'Unisex',
       watchType,
       mechanism,
       watchColor: {
@@ -177,7 +393,7 @@ router.post('/', upload.single('image'), async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: 'Watch details added successfully with Cloudinary image',
+      message: 'Watch details added successfully',
       data: watch,
     });
   } catch (error) {
@@ -202,6 +418,7 @@ router.put('/:id', upload.single('image'), async (req, res) => {
       brandName,
       modelName,
       modelCode,
+      gender,
       watchType,
       mechanism,
       watchColor,
@@ -212,18 +429,15 @@ router.put('/:id', upload.single('image'), async (req, res) => {
       finalPrice,
       buyerName,
       buyerNumber,
+      soldAt,
       notes,
       removeImage,
     } = body;
 
-    // Handle new image file upload if provided
     if (req.file) {
-      console.log('[CLOUDINARY] Replacing image for watch ID:', req.params.id);
-      // Remove old image from Cloudinary if existed
       if (watch.imagePublicId) {
         await deleteFromCloudinary(watch.imagePublicId);
       }
-      // Upload new image
       const uploadRes = await uploadToCloudinary(req.file.buffer);
       watch.imageUrl = uploadRes.secure_url;
       watch.imagePublicId = uploadRes.public_id;
@@ -238,6 +452,7 @@ router.put('/:id', upload.single('image'), async (req, res) => {
     if (brandName) watch.brandName = brandName;
     if (modelName) watch.modelName = modelName;
     if (modelCode !== undefined) watch.modelCode = modelCode;
+    if (gender) watch.gender = gender;
     if (watchType) watch.watchType = watchType;
     if (mechanism) watch.mechanism = mechanism;
     if (watchColor) {
@@ -255,7 +470,7 @@ router.put('/:id', upload.single('image'), async (req, res) => {
         if (finalPrice !== undefined) watch.finalPrice = Number(finalPrice);
         if (buyerName !== undefined) watch.buyerName = buyerName;
         if (buyerNumber !== undefined) watch.buyerNumber = buyerNumber;
-        if (!watch.soldAt) watch.soldAt = new Date();
+        watch.soldAt = soldAt ? new Date(soldAt) : (watch.soldAt || new Date());
       } else if (status === 'Available') {
         watch.finalPrice = null;
         watch.buyerName = '';
@@ -278,7 +493,7 @@ router.put('/:id', upload.single('image'), async (req, res) => {
 });
 
 // @route   PATCH /api/watches/:id/sell
-// @desc    Update watch status to Sold with sale details
+// @desc    Update watch status to Sold with sale details & custom selling date
 // @access  Private (Admin)
 router.patch('/:id/sell', async (req, res) => {
   try {
@@ -325,9 +540,7 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ success: false, message: 'Watch record not found' });
     }
 
-    // Delete image from Cloudinary if present
     if (watch.imagePublicId) {
-      console.log(`[CLOUDINARY] Purging image (${watch.imagePublicId}) for deleted watch ID: ${req.params.id}`);
       await deleteFromCloudinary(watch.imagePublicId);
     }
 
