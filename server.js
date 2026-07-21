@@ -89,7 +89,7 @@ mongoose
     console.log('Successfully connected to MongoDB Atlas database');
     await seedAdmin();
 
-    app.listen(PORT, () => {
+    app.listen(PORT, '0.0.0.0', () => {
       console.log(`===============================================`);
       console.log(` Smarter Times Backend Server is listening`);
       console.log(` Server running on http://localhost:${PORT}`);
