@@ -12,11 +12,11 @@ const generateToken = (id) => {
 };
 
 // @route   POST /api/auth/login
-// @desc    Admin login
+// @desc    Admin login (robust trim & lowercase handling)
 // @access  Public
 router.post('/login', async (req, res) => {
   try {
-    const { username, password } = req.body;
+    let { username, password } = req.body;
 
     if (!username || !password) {
       return res.status(400).json({
@@ -25,11 +25,14 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    const user = await User.findOne({ username: username.toLowerCase() });
+    username = String(username).trim().toLowerCase();
+    password = String(password).trim();
+
+    const user = await User.findOne({ username });
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid admin credentials',
+        message: 'Invalid admin username or password',
       });
     }
 
@@ -37,7 +40,7 @@ router.post('/login', async (req, res) => {
     if (!isMatch) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid admin credentials',
+        message: 'Invalid admin username or password',
       });
     }
 
@@ -76,12 +79,12 @@ router.get('/me', protect, async (req, res) => {
 });
 
 // @route   POST /api/auth/seed
-// @desc    Ensure default admin user exists
+// @desc    Ensure admin credentials in DB match environment or reset admin password
 // @access  Public
 router.post('/seed', async (req, res) => {
   try {
-    const adminUsername = (process.env.ADMIN_USERNAME || 'admin').toLowerCase();
-    const adminPassword = process.env.ADMIN_PASSWORD || 'Admin@SmarterTimes2026';
+    const adminUsername = (process.env.ADMIN_USERNAME || 'admin').trim().toLowerCase();
+    const adminPassword = (process.env.ADMIN_PASSWORD || 'Admin@SmarterTimes2026').trim();
 
     let user = await User.findOne({ username: adminUsername });
     if (!user) {
@@ -97,15 +100,18 @@ router.post('/seed', async (req, res) => {
         username: adminUsername,
       });
     } else {
+      // Re-hash and sync password
+      user.password = adminPassword;
+      await user.save();
       return res.json({
         success: true,
-        message: 'Admin user already exists',
+        message: 'Admin user credentials synced & reset successfully',
         username: adminUsername,
       });
     }
   } catch (error) {
     console.error('Seed error:', error);
-    res.status(500).json({ success: false, message: 'Failed to seed admin user' });
+    res.status(500).json({ success: false, message: 'Failed to seed/reset admin user' });
   }
 });
 

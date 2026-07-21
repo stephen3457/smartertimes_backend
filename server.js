@@ -43,13 +43,13 @@ if (require('fs').existsSync(frontendDistPath)) {
   });
 }
 
-// Auto Seed Admin Function
+// Auto Seed & Sync Admin Credentials Function
 const seedAdmin = async () => {
   try {
-    const adminUsername = (process.env.ADMIN_USERNAME || 'admin').toLowerCase();
-    const adminPassword = process.env.ADMIN_PASSWORD || 'Admin@SmarterTimes2026';
+    const adminUsername = (process.env.ADMIN_USERNAME || 'admin').trim().toLowerCase();
+    const adminPassword = (process.env.ADMIN_PASSWORD || 'Admin@SmarterTimes2026').trim();
 
-    const existingAdmin = await User.findOne({ username: adminUsername });
+    let existingAdmin = await User.findOne({ username: adminUsername });
     if (!existingAdmin) {
       await User.create({
         username: adminUsername,
@@ -59,10 +59,18 @@ const seedAdmin = async () => {
       });
       console.log(`[SEED] Default Admin user created (${adminUsername})`);
     } else {
-      console.log(`[SEED] Admin user (${adminUsername}) already exists`);
+      // Ensure password matches environment config
+      const isMatch = await existingAdmin.comparePassword(adminPassword);
+      if (!isMatch) {
+        existingAdmin.password = adminPassword;
+        await existingAdmin.save();
+        console.log(`[SEED] Admin password synced with environment variables (${adminUsername})`);
+      } else {
+        console.log(`[SEED] Admin user (${adminUsername}) credentials verified`);
+      }
     }
   } catch (error) {
-    console.error('[SEED ERROR] Failed to seed admin user:', error.message);
+    console.error('[SEED ERROR] Failed to seed/sync admin user:', error.message);
   }
 };
 
